@@ -1,3 +1,4 @@
+use std::alloc::Layout;
 use std::fs::File;
 use std::path::Path;
 use std::io::{Read, Seek, SeekFrom};
@@ -22,10 +23,17 @@ pub struct FATBootSector {
     reserved_sectors: u16,
     number_of_fats: u8,
     root_dir_entries: u16,
-    total_sectors: u16,
+    total_sectors_16: u16,
     media_descriptor: u8,
     sectors_per_fat: u16,
     total_sectors_32: u32,
+}
+
+#[derive(Debug)]
+pub struct FATLayout {
+    fat_start: u32,
+    root_dir_start: u32,
+    data_start: u32,
 }
 
 pub struct SDController{
@@ -69,11 +77,28 @@ impl SDController{
             reserved_sectors: u16::from_le_bytes([data[14], data[15]]),
             number_of_fats: data[16],
             root_dir_entries: u16::from_le_bytes([data[17], data[18]]),
-            total_sectors: u16::from_le_bytes([data[19], data[20]]),
+            total_sectors_16: u16::from_le_bytes([data[19], data[20]]),
             media_descriptor: data[21],
             sectors_per_fat: u16::from_le_bytes([data[22], data[23]]),
             total_sectors_32: u32::from_le_bytes([data[32], data[33], data[34], data[36]]),
         })
+
+    }
+
+    pub fn calculate_layout(&self, boot_sector: &FATBootSector) -> FATLayout{
+        let root_dir_sectors = ((boot_sector.root_dir_entries as u32 * 32) +
+                                (boot_sector.bytes_per_sector as u32 -1)) /
+                                boot_sector.bytes_per_sector as u32;
+        let fat_start = boot_sector.reserved_sectors as u32;
+        let root_dir_start = fat_start +
+                                (boot_sector.number_of_fats as u32 * boot_sector.sectors_per_fat as u32);
+        let data_start = root_dir_start + root_dir_sectors;
+
+        FATLayout {
+            fat_start,
+            root_dir_start,
+            data_start,
+        }
 
     }
 
@@ -107,8 +132,20 @@ fn main() -> Result<(), SDError>{
             println!("Reserved sectors {}", boot_sector.reserved_sectors);
             println!("Number of FATs: {}", boot_sector.number_of_fats);
             println!("Root directory entries: {}", boot_sector.root_dir_entries);
-            println!("Total sectors: {}", boot_sector.total_sectors);
+            println!("Total sectors: {}",
+                if boot_sector.total_sectors_16 > 0{
+                    boot_sector.total_sectors_16 as u32
+                } else {
+                    boot_sector.total_sectors_32
+                });
             println!("Sectors per FAT: {}", boot_sector.sectors_per_fat);
+
+            let layout = controller.calculate_layout(&boot_sector);
+            println!("\nFilesystem layout:");
+            println!("FAT starts at sector: {}", layout.fat_start);
+            println!("Root directory starts at sector: {}", layout.root_dir_start);
+            println!("Data area starts at sector: {}", layout.data_start);
+
         }
         Err(e) => println!("Failed to read boot sector: {}", e),
     }
